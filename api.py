@@ -1,14 +1,15 @@
 from fastapi import FastAPI, Query
 from github_api import get_user_repos, get_repo_readme
-from openai import OpenAI
-import os
 from dotenv import load_dotenv
+import os
+import httpx
 
+# Load environment variables from .env file
 load_dotenv()
-openai_api_key = os.getenv("OPENAI_API_KEY")
+nlpcloud_key = os.getenv("NLP_CLOUD_API_KEY")
 
+# FastAPI app
 app = FastAPI()
-client = OpenAI(api_key=openai_api_key)
 
 @app.get("/")
 def root():
@@ -42,43 +43,38 @@ def scan_github(username: str = Query(...)):
 @app.get("/summary")
 def generate_summary(username: str = Query(...)):
     repos = get_user_repos(username)
-    context = f"GitHub profile summary for @{username}.\n\n"
+    context = f"GitHub summary for @{username}.\n"
 
-    for repo in repos[:5]:  # limit to top 5 repos
-        name = repo["name"]
-        stars = repo["stargazers_count"]
-        forks = repo["forks_count"]
-        language = repo["language"]
-        updated = repo["updated_at"]
-        readme = get_repo_readme(username, name)
-
-        context += f"\n📁 {name} ({language}) ⭐ {stars} | 🍴 {forks} | Last updated: {updated}\n"
+    for repo in repos[:5]:  # Limit to top 5 repos
+        context += f"\n- {repo['name']} ({repo['language']}) ⭐ {repo['stargazers_count']}, 🍴 {repo['forks_count']}\n"
+        readme = get_repo_readme(username, repo["name"])
         if readme:
             context += f"README:\n{readme[:500]}\n"
 
-    # Ask OpenAI to summarize
-    messages = [
-        {
-            "role": "system",
-            "content": "You are an expert tech recruiter. Generate a concise, professional summary of a developer's GitHub profile. Highlight programming languages, strengths, project types, and any notable features. Avoid fluff."
-        },
-        {
-            "role": "user",
-            "content": context
-        }
-    ]
-
     try:
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo",  # ✅ SAFE CHOICE
+        headers = {
+            "Authorization": f"Token {nlpcloud_key}",
+            "Content-Type": "application/json",
+        }
 
-            messages=messages,
-            max_tokens=300
+        payload = {
+            "text": context,
+            "min_length": 50,
+            "max_length": 250
+        }
+
+        response = httpx.post(
+            "https://api.nlpcloud.io/v1/bart-large-cnn/summarization",
+            headers=headers,
+            json=payload,
+            timeout=20,
         )
-        summary = response.choices[0].message.content.strip()
+
+        summary = response.json().get("summary_text")
         return {
             "username": username,
             "summary": summary
         }
+
     except Exception as e:
         return {"error": str(e)}
